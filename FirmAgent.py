@@ -1,86 +1,123 @@
-class FirmAgent:
-    """
-    Represents a single firm participating in the emissions allowance market.
+from mesa import Agent
+from DataStructures import Decision
+from Risk import Risk
+import random
 
-    A FirmAgent holds allowances, produces emissions, observes the market,
-    and decides whether to buy, sell, or hold allowances based on its strategy
-    and risk preferences.
+
+class FirmAgent(Agent):
+    """
+    Represents a regulated firm participating in the ETS.
+
+    Each firm:
+    - emits CO2 at a fixed daily rate,
+    - forecasts compliance needs over the remaining year,
+    - submits one buy or sell order per day,
+    - follows a time-dependent risk pattern that governs
+      pricing aggressiveness.
     """
 
     def __init__(
         self,
-        agent_id: int,
-        allowances: float,
-        cash: float,
-        emissions_remaining: float,
-        risk_aversion: float,
-        strategy
+        unique_id,
+        model,
+        daily_emissions,
+        product_price,
+        cost,
+        risk: Risk,
+        allowances,
     ):
         """
-        Initializes a firm agent with its initial state.
+        Initializes a firm agent.
 
-        @param agent_id unique identifier of the agent
-        @param allowances initial number of allowances owned
-        @param cash initial cash balance
-        @param emissions_remaining expected future emissions until compliance
-        @param risk_aversion parameter controlling tolerance to uncertainty
-        @param strategy trading strategy used by the agent
+        :param unique_id: unique firm identifier (managed explicitly)
+        :param model: reference to the ETSModel
+        :param daily_emissions: fixed daily CO2 emissions
+        :param product_price: output price (proxy for value creation)
+        :param cost: marginal production cost
+        :param risk: Risk object defining aggressiveness over time
+        :param allowances: initial allowance holdings
         """
-        pass
+        # Mesa 3.x-compatible initialization
+        super().__init__(model)
+        self.unique_id = unique_id
 
-    """
-    Determines the agent's trading action for the current time step.
+        self.daily_emissions = float(daily_emissions)
+        self.product_price = float(product_price)
+        self.cost = float(cost)
+        self.risk = risk
+        self.allowances = float(allowances)
 
-    The agent observes the current market state and, based on its internal
-    state and trading strategy, decides whether to:
-    - submit a buy order
-    - submit a sell order
-    - take no action
+        self.cum_emissions = 0.0
+        self.profit = 0.0
+        self.decision = None
 
-    @param market a snapshot of the current market state
-    @param t current simulation time step
-    @return an Order object if the agent trades, or None otherwise
-    """
-    def decide(self, market, t: int):
-        pass
+    def decide(self):
+        """
+        Determines the firm's trading decision for the day.
 
-    """
-    Updates the agent's internal state after a trade has been executed.
+        Economic interpretation:
+        - emissions are realized deterministically,
+        - total emissions are forecast over the remaining year,
+        - the firm compares forecasted emissions to allowances,
+        - a buy or sell decision is formed,
+        - the limit price is adjusted according to risk.
+        """
 
-    This includes:
-    - adjusting allowance holdings
-    - adjusting cash balance
+        # 1. Emit CO2
+        self.cum_emissions += self.daily_emissions
 
-    This method is called only when the agent participated in the trade.
+        # 2. Forecast end-of-year emissions
+        remaining_days = max(self.model.horizon - self.model.day, 1)
+        forecast = self.cum_emissions + remaining_days * self.daily_emissions
+        gap = forecast - self.allowances
 
-    @param trade the executed trade involving this agent
-    @return None
-    """
-    def apply_trade(self, trade) -> None:
-        pass
+        # 3. Risk-dependent aggressiveness
+        alpha = self.risk.value(self.model.day)
 
-    """
-    Updates the agent's expected remaining emissions.
+        # 4. Noisy economic valuation
+        valuation = (
+            self.model.base_value_price
+            * (1 + random.normalvariate(0, self.model.value_shock_std))
+        )
 
-    This method may be called once per time step to account for
-    realized emissions or updated forecasts.
+        # 5. Regulatory penalty anchor
+        penalty_anchor = (
+            (self.model.day / self.model.horizon)
+            * self.model.penalty
+            * (1 + random.normalvariate(0, self.model.anchor_shock_std))
+        )
 
-    @param amount emissions realized during the current time step
-    @return None
-    """
-    def update_emissions(self, amount: float) -> None:
-        pass
+        # 6. Trading decision
+        if gap > 0:
+            # Needs allowances → buy
+            side = "buy"
+            qty = (gap / remaining_days) * self.model.trade_fraction
 
-    """
-    Computes the agent's current compliance gap.
+            price = max(
+                penalty_anchor + alpha * (valuation - penalty_anchor),
+                penalty_anchor,
+            )
 
-    The compliance gap is defined as:
-    expected remaining emissions minus current allowance holdings.
+        else:
+            # Excess allowances → sell
+            side = "sell"
+            qty = (-gap / remaining_days) * self.model.trade_fraction
 
-    A positive value indicates a need to buy allowances.
-    A negative value indicates excess allowances available for sale.
+            anchor = self.model.market.last_price or valuation
+            price = anchor + alpha * (valuation - anchor)
 
-    @return the current compliance gap
-    """
-    def compliance_gap(self) -> float:
-        pass
+        self.decision = Decision(
+            agent_id=self.unique_id,
+            side=side,
+            quantity=max(qty, 0.0),
+            price=max(price, 0.0),
+        )
+
+    def post_trade(self):
+        """
+        Applies operating profit after trading.
+
+        This represents non-ETS profit flows and keeps
+        trading profits and production profits separated.
+        """
+        self.profit += self.product_price - self.cost

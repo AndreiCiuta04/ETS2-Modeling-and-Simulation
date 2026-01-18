@@ -1,54 +1,68 @@
+from DataStructures import Trade, Decision
+
+
 class Market:
     """
-    Represents the trading environment in which agents submit orders
-    and trades are executed.
+    Represents the allowance trading market.
 
-    The Market owns the order book, matches orders, records trades,
-    and maintains the current market price.
+    The market collects firm decisions, matches compatible
+    buy and sell orders, and produces a daily allowance price.
+
+    The market has no strategic behavior.
     """
 
-    def __init__(self, initial_price: float):
+    def __init__(self, initial_price: float | None = None):
         """
         Initializes the market.
 
-        @param initial_price starting price of allowances
+        :param initial_price: optional starting allowance price
         """
         self.last_price = initial_price
-        self.order_book = None
-        self.trade_log = []
+        self.daily_volume = 0.0
 
-    """
-    Submits an order to the market.
+        self.price_history = []
+        self.volume_history = []
 
-    The order is added to the order book but not executed immediately.
-    Execution occurs when match_orders() is called.
+    def clear(self, decisions):
+        """
+        Clears the market for a single trading day.
 
-    @param order the order submitted by an agent
-    @return None
-    """
-    def submit_order(self, order):
-        pass
+        Market clearing means:
+        - sorting buy orders by descending price,
+        - sorting sell orders by ascending price,
+        - matching orders while bids ≥ asks,
+        - determining transaction prices,
+        - updating the market-clearing price.
+        """
+        buys = [d for d in decisions if d and d.side == "buy" and d.quantity > 0]
+        sells = [d for d in decisions if d and d.side == "sell" and d.quantity > 0]
 
-    """
-    Matches buy and sell orders stored in the order book.
+        buys.sort(key=lambda d: d.price, reverse=True)
+        sells.sort(key=lambda d: d.price)
 
-    This method applies the market's matching rules, generates trades,
-    updates the last traded price, and records executed trades.
+        trades = []
+        self.daily_volume = 0.0
 
-    @return None
-    """
-    def match_orders(self) -> None:
-        pass
+        i = j = 0
 
-    """
-    Returns a snapshot of the current market state.
+        while i < len(buys) and j < len(sells) and buys[i].price >= sells[j].price:
+            buy, sell = buys[i], sells[j]
+            qty = min(buy.quantity, sell.quantity)
+            price = 0.5 * (buy.price + sell.price)
 
-    The returned MarketState contains summary information such as
-    price, best bid, best ask, volume, and volatility.
+            trades.append(Trade(buy.agent_id, sell.agent_id, qty, price))
+            self.daily_volume += qty
+            self.last_price = price
 
-    Agents use this information to make trading decisions.
+            buys[i] = Decision(buy.agent_id, buy.side, buy.quantity - qty, buy.price)
+            sells[j] = Decision(sell.agent_id, sell.side, sell.quantity - qty, sell.price)
 
-    @return MarketState
-    """
-    def get_state(self):
-        pass
+            if buys[i].quantity <= 1e-12:
+                i += 1
+            if sells[j].quantity <= 1e-12:
+                j += 1
+
+        self.price_history.append(self.last_price if self.last_price is not None else 0.0)
+        self.volume_history.append(self.daily_volume)
+
+        return trades

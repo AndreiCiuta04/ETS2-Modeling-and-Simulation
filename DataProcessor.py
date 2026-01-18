@@ -1,97 +1,107 @@
+import csv
+
+
 class DataProcessor:
     """
-    Handles loading, cleaning, and transforming real-world emissions
-    and allowance data into initial conditions for the simulation.
+    Responsible for importing empirical ETS data into the simulation.
+
+    The DataProcessor:
+    - reads raw CSV input files,
+    - validates and cleans emissions data,
+    - derives numerical initial conditions.
+
+    It does NOT:
+    - create agents,
+    - assign risk behavior,
+    - interact with Mesa.
+
+    This keeps data handling fully separated from simulation logic.
     """
 
-    """
-    Loads raw emissions and allowance data from external sources
-    such as CSV files, databases, or APIs.
+    def __init__(self):
+        """
+        Initializes the data processor.
+        """
+        self.emissions = []
+        self.n_agents = 0
 
-    This method is responsible only for input/output operations.
-    No cleaning, aggregation, or transformation is performed here.
+    def load_emissions_csv(self, filepath: str) -> None:
+        """
+        Loads annual firm emissions from a CSV file.
 
-    @return None
-    """
-    def load_data(self) -> None:
-        pass
+        Expected:
+        - a header row containing a column named 'emissions'
+          (case- and whitespace-insensitive)
 
-    """
-    Cleans and preprocesses the raw data.
+        Each row corresponds to one firm.
+        Firms with zero or negative emissions are kept for now
+        and handled during validation.
+        """
+        self.emissions = []
 
-    Typical operations include:
-    - filtering relevant Austrian companies
-    - handling missing or inconsistent values
-    - aggregating emissions to the desired time scale
-    - aligning emissions data with allowance data
+        # utf-8-sig removes Excel BOM if present
+        with open(filepath, newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
 
-    After this step, the internal datasets are consistent and usable.
+            if reader.fieldnames is None:
+                raise ValueError("CSV file has no header row.")
 
-    @return None
-    """
-    def preprocess(self) -> None:
-        pass
+            # Normalize headers: lowercase and strip whitespace
+            field_map = {
+                name.strip().lower(): name
+                for name in reader.fieldnames
+            }
 
-    """
-    Performs consistency and sanity checks on the processed data.
+            if "emissions" not in field_map:
+                raise ValueError(
+                    f"No 'emissions' column found. Columns are: {reader.fieldnames}"
+                )
 
-    Example checks include:
-    - no negative emissions values
-    - no negative allowance values
-    - consistent company identifiers
-    - non-empty datasets
+            emissions_key = field_map["emissions"]
 
-    Raises exceptions if critical issues are detected.
+            for row in reader:
+                try:
+                    value = float(row[emissions_key])
+                    self.emissions.append(value)
+                except (ValueError, TypeError):
+                    # Skip malformed rows explicitly
+                    continue
 
-    @return None
-    """
-    def validate_data(self) -> None:
-        pass
+        self.n_agents = len(self.emissions)
 
-    """
-    Computes initial allowance allocations for each company
-    based on the processed allowance data.
+    def validate(self) -> None:
+        """
+        Validates and cleans loaded emissions data.
 
-    This may involve proportional allocation, scaling, or
-    simplified assumptions that are explicitly documented
-    in the project report.
+        Validation rules:
+        - At least one firm must be present
+        - Firms with zero or negative emissions are excluded,
+          as they do not meaningfully participate in allowance trading
+        """
+        if not self.emissions:
+            raise ValueError("No emissions data loaded.")
 
-    The computed values are stored internally.
+        # Filter out non-positive emitters
+        filtered = [e for e in self.emissions if e > 0.0]
 
-    @return None
-    """
-    def derive_initial_allowances(self) -> None:
-        pass
+        if not filtered:
+            raise ValueError("All firms have zero or negative emissions.")
 
-    """
-    Computes expected future emissions for each company
-    based on historical emissions data.
+        self.emissions = filtered
+        self.n_agents = len(self.emissions)
 
-    These values represent emissions remaining until the
-    compliance deadline and are used by agents to determine
-    their trading needs.
+    def derive_initial_conditions(self, allowance_factor: float = 0.9):
+        """
+        Derives numerical initial conditions for the model.
 
-    The computed values are stored internally.
-
-    @return None
-    """
-    def derive_initial_emissions(self) -> None:
-        pass
-
-    """
-    Creates and returns a list of FirmAgent objects using
-    the processed emissions and allowance data.
-
-    Each agent is initialized with:
-    - initial allowances
-    - expected emissions
-    - initial cash (if modeled)
-    - an assigned or placeholder trading strategy
-
-    This method represents the final output of the DataProcessor
-    and the input to the Simulation.
-
-    @return list[FirmAgent]
-    """
-    def generate_initial_agents(self) -> list:
-        pass
+        :param allowance_factor: fraction of annual emissions
+                                 allocated as initial allowances
+        :return: list of dictionaries with firm fundamentals
+        """
+        return [
+            {
+                "annual_emissions": e,
+                "initial_allowances": allowance_factor * e,
+            }
+            for e in self.emissions
+        ]
