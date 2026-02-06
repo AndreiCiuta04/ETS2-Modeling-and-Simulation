@@ -1,6 +1,7 @@
 import os
 import random
 import matplotlib.pyplot as plt
+import numpy as np
 
 from DataProcessor import DataProcessor
 from ETSModel import ETSModel
@@ -43,6 +44,10 @@ def main():
     # -----------------------------
     horizon = 365
     penalty = 100.0
+    n_runs = 10
+    all_price_paths = []
+    all_volume_paths = []
+    final_prices = []
 
     # -----------------------------
     # Load emissions data (empirical)
@@ -101,21 +106,51 @@ def main():
     # -----------------------------
     # Create and run model
     # -----------------------------
-    model = ETSModel(
-        initial_conditions=initial_conditions,
-        risk_objects=risk_objects,
-        penalty=penalty,
-        horizon=horizon,
-        base_value_price=65.0,
-        trade_fraction=1.0,
-        value_shock_std=0.05,
-        anchor_shock_std=0.03,
-        initial_market_price=65.0,
-        product_price=55.0,
-        cost=25.0,
-    )
+    for run in range(n_runs):
 
-    run_model(model, horizon)
+        # Re-create risk objects each run (important!)
+        risk_objects = []
+        for i in range(n_agents):
+            pattern = random.choice(available_patterns)
+            start_risk = random.uniform(0.6, 0.9)
+            end_risk = random.uniform(0.1, start_risk)
+
+            risk_objects.append(
+                Risk(
+                    pattern=pattern,
+                    start_risk=start_risk,
+                    end_risk=end_risk,
+                    horizon=horizon,
+                    seed=1000 + i + run * 10000,
+                    n_steps=random.randint(3, 7),
+                )
+            )
+
+        model = ETSModel(
+            initial_conditions=initial_conditions,
+            risk_objects=risk_objects,
+            penalty=penalty,
+            horizon=horizon,
+            base_value_price=65.0,
+            trade_fraction=1.0,
+            value_shock_std=0.05,
+            anchor_shock_std=0.03,
+            initial_market_price=65.0,
+            product_price=55.0,
+            cost=25.0,
+        )
+
+        run_model(model, horizon)
+
+        # Store results
+        all_price_paths.append(model.market.price_history)
+        all_volume_paths.append(model.market.volume_history)
+        final_prices.append(model.market.last_price)
+
+        #compute centered results
+        mean_price = np.mean(all_price_paths, axis=0)
+        std_price = np.std(all_price_paths, axis=0)
+        mean_volume = np.mean(all_volume_paths, axis=0)
 
     # -----------------------------
     # Plot price path
@@ -129,6 +164,44 @@ def main():
     plt.legend()
     plt.tight_layout()
     plt.show()
+
+    # -----------------------------
+    # Plot market volume
+    # -----------------------------
+    plt.figure(figsize=(10, 5))
+    plt.plot(model.market.volume_history, label="Daily traded volume")
+    plt.xlabel("Day")
+    plt.ylabel("Volume")
+    plt.title("ETS Market Trading Volume Over Time")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(mean_price, label="Average price")
+
+    plt.fill_between(
+        range(horizon),
+        mean_price - std_price,
+        mean_price + std_price,
+        alpha=0.3,
+        label="±1 std"
+    )
+
+    plt.xlabel("Day")
+    plt.ylabel("Price")
+    plt.title("Monte Carlo Average Allowance Price")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+    print("\nMonte Carlo results:")
+    print("Average final price:", np.mean(final_prices))
+    print("Std of final price:", np.std(final_prices))
+    print("Min final price:", np.min(final_prices))
+    print("Max final price:", np.max(final_prices))
 
     # -----------------------------
     # Print final results + risk strategies

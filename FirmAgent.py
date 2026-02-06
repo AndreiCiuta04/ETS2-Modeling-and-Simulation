@@ -87,31 +87,67 @@ class FirmAgent(Agent):
             * (1 + random.normalvariate(0, self.model.anchor_shock_std))
         )
 
+        reservation_price = valuation
+        market_price = self.model.market.last_price
         # 6. Trading decision
         if gap > 0:
-            # Needs allowances → buy
-            side = "buy"
-            qty = (gap / remaining_days) * self.model.trade_fraction
+            # Needs allowances → buy NEW!
+            if gap > 0:
+                # Needs allowances → buy
+                side = "buy"
+                qty = (gap / remaining_days) * self.model.trade_fraction
 
-            price = max(
-                penalty_anchor + alpha * (valuation - penalty_anchor),
-                penalty_anchor,
-            )
+                if market_price is not None and market_price < reservation_price:
+                    price = reservation_price - alpha * abs(reservation_price - market_price)
+                else:
+                    price = reservation_price
+
+
+
+            price = max(price, penalty_anchor)
+
 
         else:
             # Excess allowances → sell
             side = "sell"
             qty = (-gap / remaining_days) * self.model.trade_fraction
 
-            anchor = self.model.market.last_price or valuation
-            price = anchor + alpha * (valuation - anchor)
+            if market_price is not None and market_price > reservation_price:
+                price = reservation_price + alpha * abs(reservation_price - market_price)
+            else:
+                price = reservation_price
+
+
+
+
+        '''
+            # 6. Trading decision
+            if gap > 0:
+                # Needs allowances → buy
+                side = "buy"
+                qty = (gap / remaining_days) * self.model.trade_fraction
+    
+                price = max(
+                    penalty_anchor + alpha * (valuation - penalty_anchor),
+                    penalty_anchor,
+                )
+    
+            else:
+                # Excess allowances → sell
+                side = "sell"
+                qty = (-gap / remaining_days) * self.model.trade_fraction
+    
+                anchor = self.model.market.last_price or valuation
+                price = anchor + alpha * (valuation - anchor)
+            '''
+
 
         self.decision = Decision(
             agent_id=self.unique_id,
             side=side,
             quantity=max(qty, 0.0),
             price=max(price, 0.0),
-        )
+            )
 
     def post_trade(self):
         """
