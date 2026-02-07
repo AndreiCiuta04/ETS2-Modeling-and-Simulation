@@ -10,72 +10,44 @@ from RiskPattern import RiskPattern
 from run import run_model
 
 
-def build_initial_conditions_with_fixed_cap(emissions, cap_fraction=0.9, weight_sigma=0.6):
-    """
-    Builds initial_conditions while keeping emissions unchanged.
-
-    - Total allowances = cap_fraction * total_emissions
-    - Allocation is heterogeneous using random weights so that
-      some firms receive more than their emissions (sellers) and
-      some receive less (buyers).
-
-    :param emissions: list of annual emissions (empirical)
-    :param cap_fraction: total allowances fraction of total emissions
-    :param weight_sigma: dispersion of allocation weights (higher => more heterogeneity)
-    :return: list of dicts: {"annual_emissions": e, "initial_allowances": a}
-    """
-    total_emissions = sum(emissions)
-    total_allowances = cap_fraction * total_emissions
-
-    weights = [random.lognormvariate(0, weight_sigma) for _ in emissions]
-    w_sum = sum(weights)
-
-    initial_conditions = []
-    for e, w in zip(emissions, weights):
-        a = total_allowances * (w / w_sum)
-        initial_conditions.append({"annual_emissions": e, "initial_allowances": a})
-
-    return initial_conditions
-
-
 def main():
     # -----------------------------
     # Simulation parameters
     # -----------------------------
     horizon = 365
-    penalty = 100.0
-    n_runs = 10
+    penalty = 70.0
+    n_runs = 1
+
     all_price_paths = []
     all_volume_paths = []
     final_prices = []
 
-    # -----------------------------
-    # Load emissions data (empirical)
-    # -----------------------------
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_path = os.path.join(base_dir, "Emission Data.csv")
-
-    processor = DataProcessor()
-    processor.load_emissions_csv(csv_path)
-    processor.validate()
-
-    emissions = processor.emissions
-    n_agents = len(emissions)
-
-    print(f"Loaded {n_agents} agents from data.")
 
     # -----------------------------
-    # Build initial allowances:
-    # emissions unchanged, cap fixed, allocation heterogeneous
+    # Load data
     # -----------------------------
-    initial_conditions = build_initial_conditions_with_fixed_cap(
-        emissions=emissions,
-        cap_fraction=0.9,
-        weight_sigma=0.6,  # increase for more heterogeneity/volatility
+    dp = DataProcessor()
+
+    dp.load_emissions_csv(os.path.join(base_dir, "Emission Data.csv"))
+    initial_conditions = dp.derive_initial_conditions()
+
+    firm_params = dp.load_firm_parameters(
+        os.path.join(base_dir, "EU ETS 2 real data.csv")
     )
 
+    # ------------------------------------
+    # Align datasets after cleaning
+    # ------------------------------------
+    n_agents = min(len(initial_conditions), len(firm_params))
+
+    initial_conditions = initial_conditions[:n_agents]
+    firm_params = firm_params[:n_agents]
+
+    print(f"Using {n_agents} firms after data alignment.")
+
     # -----------------------------
-    # Random risk assignment
+    # Risk patterns
     # -----------------------------
     available_patterns = [
         RiskPattern.CONSTANT,
@@ -86,29 +58,11 @@ def main():
         RiskPattern.RANDOM_STEPWISE,
     ]
 
-    risk_objects = []
-    for i in range(n_agents):
-        pattern = random.choice(available_patterns)
-        start_risk = random.uniform(0.6, 0.9)
-        end_risk = random.uniform(0.1, start_risk)
-
-        risk_objects.append(
-            Risk(
-                pattern=pattern,
-                start_risk=start_risk,
-                end_risk=end_risk,
-                horizon=horizon,
-                seed=1000 + i,
-                n_steps=random.randint(3, 7),
-            )
-        )
-
     # -----------------------------
-    # Create and run model
+    # Monte Carlo runs
     # -----------------------------
     for run in range(n_runs):
 
-        # Re-create risk objects each run (important!)
         risk_objects = []
         for i in range(n_agents):
             pattern = random.choice(available_patterns)
@@ -121,74 +75,49 @@ def main():
                     start_risk=start_risk,
                     end_risk=end_risk,
                     horizon=horizon,
-                    seed=1000 + i + run * 10000,
+                    seed=1000 + i + run * 10_000,
                     n_steps=random.randint(3, 7),
                 )
             )
 
         model = ETSModel(
             initial_conditions=initial_conditions,
+            firm_params=firm_params,
             risk_objects=risk_objects,
             penalty=penalty,
             horizon=horizon,
-            base_value_price=65.0,
-            trade_fraction=1.0,
-            value_shock_std=0.05,
-            anchor_shock_std=0.03,
-            initial_market_price=65.0,
-            product_price=55.0,
-            cost=25.0,
+            initial_market_price=30,
+            reservation_price_std=0.05,
+            production_std=0.03,
+            cost_shock_std=0.002,   # 0.2%
+            delta=0.02,
         )
 
         run_model(model, horizon)
 
-        # Store results
         all_price_paths.append(model.market.price_history)
         all_volume_paths.append(model.market.volume_history)
         final_prices.append(model.market.last_price)
 
-        #compute centered results
-        mean_price = np.mean(all_price_paths, axis=0)
-        std_price = np.std(all_price_paths, axis=0)
-        mean_volume = np.mean(all_volume_paths, axis=0)
+    # -----------------------------
+    # Aggregate statistics
+    # -----------------------------
+    mean_price = np.mean(all_price_paths, axis=0)
+    std_price = np.std(all_price_paths, axis=0)
+    mean_volume = np.mean(all_volume_paths, axis=0)
 
     # -----------------------------
-    # Plot price path
+    # Plot price paths
     # -----------------------------
-    plt.figure(figsize=(10, 5))
-    plt.plot(model.market.price_history, label="Allowance price")
-    plt.xlabel("Day")
-    plt.ylabel("Price")
-    plt.title("ETS Allowance Price Over Time")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-    # -----------------------------
-    # Plot market volume
-    # -----------------------------
-    plt.figure(figsize=(10, 5))
-    plt.plot(model.market.volume_history, label="Daily traded volume")
-    plt.xlabel("Day")
-    plt.ylabel("Volume")
-    plt.title("ETS Market Trading Volume Over Time")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
     plt.figure(figsize=(10, 5))
     plt.plot(mean_price, label="Average price")
-
     plt.fill_between(
         range(horizon),
         mean_price - std_price,
         mean_price + std_price,
         alpha=0.3,
-        label="±1 std"
+        label="±1 std",
     )
-
     plt.xlabel("Day")
     plt.ylabel("Price")
     plt.title("Monte Carlo Average Allowance Price")
@@ -197,6 +126,22 @@ def main():
     plt.tight_layout()
     plt.show()
 
+    # -----------------------------
+    # Plot volume
+    # -----------------------------
+    plt.figure(figsize=(10, 5))
+    plt.plot(mean_volume, label="Average daily volume")
+    plt.xlabel("Day")
+    plt.ylabel("Volume")
+    plt.title("Average ETS Trading Volume")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+    # -----------------------------
+    # Final stats
+    # -----------------------------
     print("\nMonte Carlo results:")
     print("Average final price:", np.mean(final_prices))
     print("Std of final price:", np.std(final_prices))
@@ -204,9 +149,9 @@ def main():
     print("Max final price:", np.max(final_prices))
 
     # -----------------------------
-    # Print final results + risk strategies
+    # Final agent snapshot (last run)
     # -----------------------------
-    print("\n=== FINAL AGENT RESULTS (WITH RISK) ===")
+    print("\n=== FINAL AGENT RESULTS ===")
     for agent_id, firm in model.firms.items():
         r = firm.risk
         print(
