@@ -2,13 +2,27 @@ import math
 import random
 from RiskPattern import RiskPattern
 
+"""
+Risk / aggressiveness dynamics for trading behavior.
+
+Risk (α) controls how strongly a firm shifts its bid/ask towards
+the previous market price (less aggressive) versus its own valuation
+(more aggressive).
+
+High α  -> more anchored to last market price (more "market-following")
+Low α   -> closer to own valuation (more "fundamental-driven")
+"""
 
 class Risk:
     """
-    Represents a time-dependent risk (aggressiveness) profile.
-
-    Risk governs how strongly a firm adjusts its bid or ask
-    relative to economic valuation and regulatory anchors.
+    Initializes a risk trajectory.
+    :param pattern: selected RiskPattern
+    :param start_risk: initial aggressiveness
+    :param end_risk: final aggressiveness
+    :param horizon: number of simulation days
+    :param seed: optional RNG seed
+    :param n_steps: number of steps for stepwise patterns
+    :param noise_std: volatility for random pattern
     """
 
     def __init__(
@@ -21,17 +35,7 @@ class Risk:
         n_steps: int = 5,
         noise_std: float = 0.05,
     ):
-        """
-        Initializes a risk trajectory.
 
-        :param pattern: selected RiskPattern
-        :param start_risk: initial aggressiveness
-        :param end_risk: final aggressiveness
-        :param horizon: number of simulation days
-        :param seed: optional RNG seed
-        :param n_steps: number of steps for stepwise patterns
-        :param noise_std: volatility for random pattern
-        """
         self.pattern = pattern
         self.start_risk = float(start_risk)
         self.end_risk = float(end_risk)

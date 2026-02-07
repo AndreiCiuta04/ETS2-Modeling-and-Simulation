@@ -11,43 +11,49 @@ class ETSModel(Model):
     def __init__(
         self,
         initial_conditions,
+        firm_params,
         risk_objects,
         penalty,
         horizon,
-        base_value_price=65.0,
-        trade_fraction=1.0,
-        value_shock_std=0.05,
-        anchor_shock_std=0.03,
         initial_market_price=None,
-        product_price=55.0,
-        cost=25.0,
+        reservation_price_std=0.05,  # kept for compatibility (unused now)
+        production_std=0.03,
+        cost_shock_std=0.02,
+        delta=0.02,
     ):
         super().__init__()
 
+        # Global parameters
         self.horizon = int(horizon)
         self.day = 0
         self.penalty = float(penalty)
 
-        self.base_value_price = base_value_price
-        self.trade_fraction = trade_fraction
-        self.value_shock_std = value_shock_std
-        self.anchor_shock_std = anchor_shock_std
+        # Parameters used by FirmAgent
+        self.reservation_price_std = reservation_price_std
+        self.production_std = production_std
+        self.cost_shock_std = cost_shock_std
+        self.delta = delta
 
+        # Market
         self.market = Market(initial_market_price)
+
+        # Firms
         self.firms = {}
-
-        for i, (ic, risk) in enumerate(zip(initial_conditions, risk_objects)):
-            daily_emissions = ic["annual_emissions"] / self.horizon
-
+        for i, (ic, params, risk) in enumerate(zip(initial_conditions, firm_params, risk_objects)):
             self.firms[i] = FirmAgent(
                 unique_id=i,
                 model=self,
-                daily_emissions=daily_emissions,
-                product_price=product_price,
-                cost=cost,
+                product_price=params["price"],
+                initial_production=params["initial_production"],
+                carbon_intensity=params["phi_j"],
+                cost=params["cost"],
+                allowances=params["initial_allowances"],
                 risk=risk,
-                allowances=ic["initial_allowances"],
             )
+
+            # NOTE: `ic` is still unused (same as your original code).
+            # If your LaTeX claims firms are initialized using this real-data series,
+            # tell me what `ic` represents (baseline emissions? production?) and I’ll wire it in.
 
     def step(self):
         """
@@ -55,29 +61,41 @@ class ETSModel(Model):
         """
         self.day += 1
 
+        # reset daily trade accounting needed for π_{j,t}
+        for firm in self.firms.values():
+            firm.q_traded_today = 0.0
+
+        # decisions
         for firm in self.firms.values():
             firm.decide()
 
+        # market clearing
         trades = self.market.clear([f.decision for f in self.firms.values()])
         self._apply_trades(trades)
 
+        # post-trade updates (profit + production + cost shock)
         for firm in self.firms.values():
             firm.post_trade()
 
+        # end-of-year penalty
         if self.day >= self.horizon:
             self._apply_terminal_penalty()
 
     def _apply_trades(self, trades):
         """
-        Transfers allowances and money between firms.
+        Transfers allowances and records traded quantity.
+        Profit is computed in FirmAgent.post_trade() via π_{j,t}.
         """
         for t in trades:
-            self.firms[t.buyer_id].allowances += t.quantity
-            self.firms[t.seller_id].allowances -= t.quantity
+            buyer = self.firms[t.buyer_id]
+            seller = self.firms[t.seller_id]
 
-            cash = t.quantity * t.price
-            self.firms[t.buyer_id].profit -= cash
-            self.firms[t.seller_id].profit += cash
+            buyer.allowances += t.quantity
+            seller.allowances -= t.quantity
+
+            # Signed traded quantity for π_{j,t}
+            buyer.q_traded_today += t.quantity
+            seller.q_traded_today -= t.quantity
 
     def _apply_terminal_penalty(self):
         """

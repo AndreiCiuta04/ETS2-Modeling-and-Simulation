@@ -1,52 +1,33 @@
 import csv
+import pandas as pd
 
 
 class DataProcessor:
     """
-    Responsible for importing empirical ETS data into the simulation.
+    Handles empirical data ingestion for the ETS model.
 
-    The DataProcessor:
-    - reads raw CSV input files,
-    - validates and cleans emissions data,
-    - derives numerical initial conditions.
-
-    It does NOT:
-    - create agents,
-    - assign risk behavior,
-    - interact with Mesa.
-
-    This keeps data handling fully separated from simulation logic.
+    Responsibilities:
+    - load annual emissions (for forecasting & penalties)
+    - load firm-level economic parameters
+    - keep raw data untouched
+    - perform only explicit, documented transformations
     """
 
     def __init__(self):
-        """
-        Initializes the data processor.
-        """
         self.emissions = []
-        self.n_agents = 0
+        self.initial_conditions = []
+        self.firm_params = []
 
-    def load_emissions_csv(self, filepath: str) -> None:
-        """
-        Loads annual firm emissions from a CSV file.
-
-        Expected:
-        - a header row containing a column named 'emissions'
-          (case- and whitespace-insensitive)
-
-        Each row corresponds to one firm.
-        Firms with zero or negative emissions are kept for now
-        and handled during validation.
-        """
+    # Annual emissions (Emission Data.csv)
+    def load_emissions_csv(self, filepath: str):
         self.emissions = []
 
-        # utf-8-sig removes Excel BOM if present
         with open(filepath, newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
 
             if reader.fieldnames is None:
-                raise ValueError("CSV file has no header row.")
+                raise ValueError("Emission Data.csv has no header row.")
 
-            # Normalize headers: lowercase and strip whitespace
             field_map = {
                 name.strip().lower(): name
                 for name in reader.fieldnames
@@ -54,54 +35,118 @@ class DataProcessor:
 
             if "emissions" not in field_map:
                 raise ValueError(
-                    f"No 'emissions' column found. Columns are: {reader.fieldnames}"
+                    f"No 'emissions' column found. Columns: {reader.fieldnames}"
                 )
 
-            emissions_key = field_map["emissions"]
+            key = field_map["emissions"]
 
             for row in reader:
                 try:
-                    value = float(row[emissions_key])
-                    self.emissions.append(value)
+                    e = float(row[key])
+                    if e > 0.0:
+                        self.emissions.append(e)
                 except (ValueError, TypeError):
-                    # Skip malformed rows explicitly
                     continue
 
-        self.n_agents = len(self.emissions)
-
-    def validate(self) -> None:
-        """
-        Validates and cleans loaded emissions data.
-
-        Validation rules:
-        - At least one firm must be present
-        - Firms with zero or negative emissions are excluded,
-          as they do not meaningfully participate in allowance trading
-        """
         if not self.emissions:
-            raise ValueError("No emissions data loaded.")
+            raise ValueError("No valid emissions data loaded.")
 
-        # Filter out non-positive emitters
-        filtered = [e for e in self.emissions if e > 0.0]
-
-        if not filtered:
-            raise ValueError("All firms have zero or negative emissions.")
-
-        self.emissions = filtered
-        self.n_agents = len(self.emissions)
-
-    def derive_initial_conditions(self, allowance_factor: float = 0.9):
-        """
-        Derives numerical initial conditions for the model.
-
-        :param allowance_factor: fraction of annual emissions
-                                 allocated as initial allowances
-        :return: list of dictionaries with firm fundamentals
-        """
-        return [
-            {
-                "annual_emissions": e,
-                "initial_allowances": allowance_factor * e,
-            }
+    def derive_initial_conditions(self):
+        self.initial_conditions = [
+            {"annual_emissions": e}
             for e in self.emissions
         ]
+        return self.initial_conditions
+
+    # Firm parameters (EU ETS 2 real data.csv)
+    def load_firm_parameters(self, filepath: str):
+        # Read raw file without header
+        df_raw = pd.read_csv(
+            filepath,
+            sep=";",
+            encoding="latin1",
+            header=None
+        )
+
+        # Detect header row
+        header_row = None
+        for i in range(min(20, len(df_raw))):
+            row = df_raw.iloc[i].astype(str).str.lower()
+            if row.str.contains("carbon").any():
+                header_row = i
+                break
+
+        if header_row is None:
+            raise ValueError("Could not find header row in EU ETS 2 real data.csv")
+
+        # Re-read with header
+        df = pd.read_csv(
+            filepath,
+            sep=";",
+            encoding="latin1",
+            header=header_row
+        )
+
+        cols = {c.strip().lower(): c for c in df.columns}
+
+        def find_col(prefixes):
+            for p in prefixes:
+                for c in cols:
+                    if c.startswith(p):
+                        return cols[c]
+            raise ValueError(f"Missing column starting with {prefixes}")
+
+        def to_float(x):
+            if x is None:
+                return None
+
+            s = str(x).strip()
+
+            # Excel error literals or empty
+            if s in {"", "#DIV/0!", "#VALUE!", "#N/A", "nan"}:
+                return None
+
+            # European formatting: thousands '.' and decimal ','
+            s = s.replace(".", "").replace(",", ".")
+
+            try:
+                return float(s)
+            except ValueError:
+                return None
+
+        tco2_col = find_col(["tco2", "emission"])
+        output_col = find_col(["daily output", "output"])
+        phi_col = find_col(["carbon intensity", "carbon"])
+        price_col = find_col(["price"])
+        cost_col = find_col(["marginal cost", "cost"])
+
+        self.firm_params = []
+
+        for _, row in df.iterrows():
+            allowances = to_float(row[tco2_col])
+            production = to_float(row[output_col])
+            phi_raw = to_float(row[phi_col])
+            price = to_float(row[price_col])
+            cost = to_float(row[cost_col])
+
+            # Skip firms with invalid fundamentals
+            if (
+                    None in (allowances, production, phi_raw, price, cost)
+                    or phi_raw <= 1
+            ):
+                continue
+
+            self.firm_params.append(
+                {
+                    "initial_allowances": allowances,
+                    "initial_production": production,
+                    "phi_j": phi_raw / 1000.0,  # kg → tons
+                    "price": price,
+                    "cost": cost,
+                }
+            )
+
+        if not self.firm_params:
+            raise ValueError("No valid firm parameters loaded.")
+
+        return self.firm_params
