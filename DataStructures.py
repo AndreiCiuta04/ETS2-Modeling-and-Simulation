@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+
 """
 Shared immutable data structures used across the ETS simulation.
 
@@ -7,22 +8,17 @@ These dataclasses represent the "messages" exchanged between agents and the mark
 - Trade: an executed transaction after market clearing
 """
 
+
 @dataclass(frozen=True)
 class Decision:
     """
-        Represents a limit order submitted by a firm.
+    Limit order submitted by a firm to the market.
 
-        Attributes:
-
-        agent_id:
-            Unique firm identifier.
-        side:
-            Either "buy" or "sell".
-        quantity:
-            Order volume in allowances (tons CO2).
-        price:
-            Limit price for the order.
-        """
+    @param agent_id: Unique firm identifier submitting the order.
+    @param side: Either "buy" or "sell".
+    @param quantity: Order volume in allowances (tons CO2).
+    @param price: Limit price of the order.
+    """
     agent_id: int
     side: str
     quantity: float
@@ -32,19 +28,13 @@ class Decision:
 @dataclass(frozen=True)
 class Trade:
     """
-        Represents an executed trade between two firms.
+    Executed transaction produced by the market clearing mechanism.
 
-        Attributes:
-
-        buyer_id:
-            Firm id of the buyer.
-        seller_id:
-            Firm id of the seller.
-        quantity:
-            Executed volume in allowances.
-        price:
-            Execution price (uniform daily clearing price).
-        """
+    @param buyer_id: Firm id of the buyer.
+    @param seller_id: Firm id of the seller.
+    @param quantity: Executed volume in allowances (tons CO2).
+    @param price: Execution price (typically the daily uniform clearing price).
+    """
     buyer_id: int
     seller_id: int
     quantity: float
