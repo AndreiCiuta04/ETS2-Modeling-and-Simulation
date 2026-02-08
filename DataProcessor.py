@@ -4,34 +4,39 @@ import pandas as pd
 
 class DataProcessor:
     """
-    Handles empirical data ingestion for the ETS model.
+    Loads empirical inputs for the ETS simulation.
 
-    Responsibilities:
-    - load annual emissions (for forecasting & penalties)
-    - load firm-level economic parameters
-    - keep raw data untouched
-    - perform only explicit, documented transformations
+    NOTE (research / future work):
+    The emissions pipeline (Emission Data.csv) is currently not used by the core simulation logic.
+    It is kept to preserve the research workflow and to enable later extensions.
     """
 
     def __init__(self):
+        """Initializes containers for ingested datasets."""
         self.emissions = []
         self.initial_conditions = []
         self.firm_params = []
 
     # Annual emissions (Emission Data.csv)
     def load_emissions_csv(self, filepath: str):
+        """
+        Loads annual emissions from a CSV with an 'emissions' column (case-insensitive).
+
+        @param filepath: Path to 'Emission Data.csv'
+        @return: None (populates self.emissions)
+        @raises ValueError: If the CSV has no header, no emissions column, or no valid values
+        """
         self.emissions = []
 
+        # utf-8-sig handles BOMs that sometimes appear in exported CSV files.
         with open(filepath, newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
 
             if reader.fieldnames is None:
                 raise ValueError("Emission Data.csv has no header row.")
 
-            field_map = {
-                name.strip().lower(): name
-                for name in reader.fieldnames
-            }
+            # Map normalized header names -> original header names.
+            field_map = {name.strip().lower(): name for name in reader.fieldnames}
 
             if "emissions" not in field_map:
                 raise ValueError(
@@ -52,23 +57,33 @@ class DataProcessor:
             raise ValueError("No valid emissions data loaded.")
 
     def derive_initial_conditions(self):
-        self.initial_conditions = [
-            {"annual_emissions": e}
-            for e in self.emissions
-        ]
+        """
+        Converts loaded emissions into a simple per-agent initialization list.
+
+        NOTE:
+        These initial conditions are currently only used for dataset alignment and are not yet
+        consumed by agent behavior in the core model.
+
+        @return: List[dict] of the form {'annual_emissions': float}
+        """
+        self.initial_conditions = [{"annual_emissions": e} for e in self.emissions]
         return self.initial_conditions
 
     # Firm parameters (EU ETS 2 real data.csv)
     def load_firm_parameters(self, filepath: str):
-        # Read raw file without header
-        df_raw = pd.read_csv(
-            filepath,
-            sep=";",
-            encoding="latin1",
-            header=None
-        )
+        """
+        Loads firm parameters from 'EU ETS 2 real data.csv'.
 
-        # Detect header row
+        The file may contain metadata rows before the actual header, so we detect the header row
+        by scanning for a row containing 'carbon'. Numeric values may use European formatting.
+
+        @param filepath: Path to 'EU ETS 2 real data.csv'
+        @return: List[dict] firm parameters
+        @raises ValueError: If the header row/required columns cannot be found or no valid rows load
+        """
+        # Read without header to detect where the header starts.
+        df_raw = pd.read_csv(filepath, sep=";", encoding="latin1", header=None)
+
         header_row = None
         for i in range(min(20, len(df_raw))):
             row = df_raw.iloc[i].astype(str).str.lower()
@@ -79,17 +94,11 @@ class DataProcessor:
         if header_row is None:
             raise ValueError("Could not find header row in EU ETS 2 real data.csv")
 
-        # Re-read with header
-        df = pd.read_csv(
-            filepath,
-            sep=";",
-            encoding="latin1",
-            header=header_row
-        )
-
+        df = pd.read_csv(filepath, sep=";", encoding="latin1", header=header_row)
         cols = {c.strip().lower(): c for c in df.columns}
 
         def find_col(prefixes):
+            """Returns the first column name whose normalized name starts with one of prefixes."""
             for p in prefixes:
                 for c in cols:
                     if c.startswith(p):
@@ -97,18 +106,13 @@ class DataProcessor:
             raise ValueError(f"Missing column starting with {prefixes}")
 
         def to_float(x):
+            """Parses numbers with EU formatting and ignores common Excel error literals."""
             if x is None:
                 return None
-
             s = str(x).strip()
-
-            # Excel error literals or empty
             if s in {"", "#DIV/0!", "#VALUE!", "#N/A", "nan"}:
                 return None
-
-            # European formatting: thousands '.' and decimal ','
-            s = s.replace(".", "").replace(",", ".")
-
+            s = s.replace(".", "").replace(",", ".")  # thousands '.' and decimal ','
             try:
                 return float(s)
             except ValueError:
@@ -129,18 +133,19 @@ class DataProcessor:
             price = to_float(row[price_col])
             cost = to_float(row[cost_col])
 
-            # Skip firms with invalid fundamentals
-            if (
-                    None in (allowances, production, phi_raw, price, cost)
-                    or phi_raw <= 1
-            ):
+            # Skip rows that do not contain the required economic values.
+            if None in (allowances, production, price, cost):
                 continue
+
+            # Ensure carbon intensity is non-trivial; fallback prevents divide-by-zero-like behavior.
+            if phi_raw is None or phi_raw < 1:
+                phi_raw = 1.0
 
             self.firm_params.append(
                 {
                     "initial_allowances": allowances,
                     "initial_production": production,
-                    "phi_j": phi_raw / 1000.0,  # kg → tons
+                    "phi_j": phi_raw / 1000.0,  # convert kg → tons
                     "price": price,
                     "cost": cost,
                 }

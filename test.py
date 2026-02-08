@@ -7,16 +7,14 @@ from DataProcessor import DataProcessor
 from ETSModel import ETSModel
 from Risk import Risk
 from RiskPattern import RiskPattern
-from run import run_model
-
 
 def main():
     # -----------------------------
     # Simulation parameters
     # -----------------------------
     horizon = 365
-    penalty = 70.0
-    n_runs = 1
+    penalty = 100
+    n_runs = 10
 
     all_price_paths = []
     all_volume_paths = []
@@ -86,14 +84,15 @@ def main():
             risk_objects=risk_objects,
             penalty=penalty,
             horizon=horizon,
-            initial_market_price=30,
+            initial_market_price=40,
             reservation_price_std=0.05,
             production_std=0.03,
-            cost_shock_std=0.002,   # 0.2%
+            cost_shock_std=0.005,   # 0.2%
             delta=0.02,
         )
 
-        run_model(model, horizon)
+        for _ in range(horizon):
+            model.step()
 
         all_price_paths.append(model.market.price_history)
         all_volume_paths.append(model.market.volume_history)
